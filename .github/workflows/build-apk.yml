@@ -1,0 +1,92 @@
+
+name: Universal Android APK Builder
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Extract Android Project
+        shell: bash
+        run: |
+          mapfile -t ZIP_FILES < <(
+            find . -maxdepth 1 -type f -iname '*.zip'
+          )
+
+          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
+            echo "Error: Upload exactly one ZIP file to repository root."
+            exit 1
+          fi
+
+          mkdir -p extracted
+
+          unzip -q "${ZIP_FILES[0]}" -d extracted
+
+          echo "Project extracted successfully."
+
+      - name: Find Android Project
+        shell: bash
+        run: |
+          GRADLEW=$(find "$GITHUB_WORKSPACE/extracted" \
+            -type f -name gradlew \
+            -not -path '*/.gradle/*' \
+            -print -quit)
+
+          if [ -z "$GRADLEW" ]; then
+            echo "Error: Gradle wrapper not found."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$GRADLEW")
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          chmod +x "$GRADLEW"
+
+          echo "Found project: $PROJECT_DIR"
+
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+
+          if ! grep -q '^sdk.dir=' local.properties 2>/dev/null; then
+            echo "sdk.dir=$ANDROID_HOME" >> local.properties
+          fi
+
+      - name: Build APK
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-APK
+          path: |
+            extracted/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
